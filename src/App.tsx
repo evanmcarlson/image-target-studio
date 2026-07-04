@@ -1,8 +1,8 @@
 import {useEffect, useRef, useState, type CSSProperties, type FormEvent} from "react";
 import {c} from "./theme";
-import {computeCrop, autoDetectRotation, type CropRegion} from "./lib/imageCrop";
+import {defaultFeasibleRotation, orientationFeasible} from "./lib/imageCrop";
 import {generateTarget, downloadZip, type GeneratedTarget} from "./lib/generateTarget";
-import {CropPreview, OrientationToggle} from "./components/CropPreview";
+import {CropperModal, type CropperResult} from "./components/CropperModal";
 
 type Phase = "upload" | "configure" | "results";
 
@@ -11,8 +11,8 @@ export function App() {
   const [file, setFile]               = useState<File | null>(null);
   const [imgUrl, setImgUrl]           = useState("");
   const [naturalSize, setNaturalSize] = useState<{w: number; h: number} | null>(null);
-  const [isRotated, setIsRotated]     = useState(false);
-  const [cropOffset, setCropOffset]   = useState({x: 0, y: 0});
+  const [applied, setApplied]         = useState<CropperResult | null>(null);
+  const [cropperOpen, setCropperOpen] = useState(false);
   const [name, setName]               = useState("");
   const [generating, setGenerating]   = useState(false);
   const [result, setResult]           = useState<GeneratedTarget | null>(null);
@@ -22,25 +22,24 @@ export function App() {
   const [showTarget, setShowTarget]   = useState(false);
   const fileInputRef                  = useRef<HTMLInputElement>(null);
 
-  const workingW = isRotated ? (naturalSize?.h ?? 0) : (naturalSize?.w ?? 0);
-  const workingH = isRotated ? (naturalSize?.w ?? 0) : (naturalSize?.h ?? 0);
-  const workingSize = naturalSize ? {w: workingW, h: workingH} : null;
-  const crop: CropRegion | null = workingSize
-    ? computeCrop(workingW, workingH, isRotated, cropOffset)
+  const dimensionError = naturalSize &&
+    !orientationFeasible(naturalSize.w, naturalSize.h, false) &&
+    !orientationFeasible(naturalSize.w, naturalSize.h, true)
+    ? `Image too small (${naturalSize.w} × ${naturalSize.h} px). Minimum 480 × 640 px.`
     : null;
-  const autoRotated = naturalSize ? autoDetectRotation(naturalSize.w, naturalSize.h) : false;
-  const tooSmall = crop ? (crop.width < 480 || crop.height < 640) : false;
-
-  useEffect(() => { setCropOffset({x: 0, y: 0}); }, [isRotated]);
 
   useEffect(() => {
     if (!file) return;
+    setApplied(null);
     const url = URL.createObjectURL(file);
     setImgUrl(url);
     const img = new Image();
     img.onload = () => {
-      setNaturalSize({w: img.naturalWidth, h: img.naturalHeight});
-      setIsRotated(autoDetectRotation(img.naturalWidth, img.naturalHeight));
+      const {naturalWidth: w, naturalHeight: h} = img;
+      setNaturalSize({w, h});
+      if (orientationFeasible(w, h, false) || orientationFeasible(w, h, true)) {
+        setCropperOpen(true);
+      }
     };
     img.src = url;
     if (!name) setName(file.name.replace(/\.[^.]+$/, "").toLowerCase().replace(/[^a-z0-9]+/g, "-"));
@@ -63,11 +62,11 @@ export function App() {
 
   async function handleGenerate(e: FormEvent) {
     e.preventDefault();
-    if (!crop || !imgUrl || !name.trim() || tooSmall) return;
+    if (!applied || !imgUrl || !name.trim()) return;
     setGenerating(true);
     setError(null);
     try {
-      const res = await generateTarget(imgUrl, crop, name.trim());
+      const res = await generateTarget(imgUrl, applied.crop, name.trim());
       setResult(res);
       setPhase("results");
       setShowDetails(true);
@@ -83,8 +82,8 @@ export function App() {
     setFile(null);
     setImgUrl("");
     setNaturalSize(null);
-    setIsRotated(false);
-    setCropOffset({x: 0, y: 0});
+    setApplied(null);
+    setCropperOpen(false);
     setName("");
     setResult(null);
     setError(null);
@@ -148,30 +147,62 @@ export function App() {
         {phase === "configure" && imgUrl && (
           <>
             <h1 style={pageTitleStyle}>Configure Target</h1>
-            <p style={pageDescStyle}>Drag to pan the crop region. Toggle orientation if needed.</p>
+            <p style={pageDescStyle}>
+              {applied ? "Adjust the crop or change image. Then generate your target." : "Choose an image to get started."}
+            </p>
 
             <div style={{display: "flex", gap: 20, alignItems: "flex-start", flexWrap: "wrap"}}>
               {/* Crop preview card */}
               <div style={{flex: "1 1 260px", maxWidth: 400}}>
                 <div style={cardStyle}>
                   <p style={sectionLabelStyle}>Image Target</p>
-                  {tooSmall && <div style={errorBoxStyle}>Image too small — minimum 480 × 640 px after crop.</div>}
-                  <CropPreview
-                    imgUrl={imgUrl}
-                    crop={crop}
-                    naturalSize={workingSize}
-                    cropOffset={cropOffset}
-                    onOffsetChange={setCropOffset}
-                  />
-                  <div style={{marginTop: 10, display: "flex", alignItems: "center", gap: 8}}>
-                    <OrientationToggle isRotated={isRotated} autoRotated={autoRotated} onChange={setIsRotated} />
-                    <input ref={fileInputRef} type="file" accept="image/*" style={{display: "none"}}
-                      onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f); }} />
-                    <label onClick={() => fileInputRef.current?.click()}
-                      style={{marginLeft: "auto", fontSize: 12, color: c.accent, cursor: "pointer", fontWeight: 500}}>
-                      Change image
+
+                  {dimensionError && (
+                    <div style={errorBoxStyle}>{dimensionError}</div>
+                  )}
+
+                  {applied && !dimensionError ? (
+                    <div>
+                      <img
+                        src={applied.previewUrl}
+                        alt="Cropped preview"
+                        style={{
+                          width: "100%",
+                          display: "block",
+                          borderRadius: 10,
+                          border: `1px solid ${c.border}`,
+                          aspectRatio: applied.crop.isRotated ? "4 / 3" : "3 / 4",
+                          objectFit: "cover",
+                        }}
+                      />
+                      <div style={{marginTop: 10, display: "flex", alignItems: "center", gap: 8}}>
+                        <button type="button" onClick={() => setCropperOpen(true)} style={adjustCropBtnStyle}>
+                          <CropIcon /> Adjust Crop
+                        </button>
+                        <label htmlFor="its-file-input" style={{marginLeft: "auto", fontSize: 12, color: c.accent, cursor: "pointer", fontWeight: 500}}>
+                          Change image
+                        </label>
+                      </div>
+                    </div>
+                  ) : !dimensionError ? (
+                    <label htmlFor="its-file-input" className="file-zone" style={{padding: "32px 16px"}}>
+                      <UploadIcon />
+                      <p style={{margin: "8px 0 0", fontSize: 13, fontWeight: 500, color: c.text}}>Choose an image</p>
                     </label>
-                  </div>
+                  ) : (
+                    <label htmlFor="its-file-input" className="file-zone" style={{padding: "24px 16px", marginTop: 12}}>
+                      <p style={{margin: 0, fontSize: 13, fontWeight: 500, color: c.accent}}>Choose a different image</p>
+                    </label>
+                  )}
+
+                  <input
+                    id="its-file-input"
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    style={{display: "none"}}
+                    onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f); }}
+                  />
                 </div>
               </div>
 
@@ -188,12 +219,12 @@ export function App() {
                         onChange={e => setName(e.target.value)} placeholder="my-image-target" />
                     </div>
 
-                    {crop && (
+                    {applied && !dimensionError && (
                       <div style={{...infoCardStyle, borderRadius: 10}}>
                         <InfoRows rows={[
-                          {label: "Orientation", value: isRotated ? "Landscape" : "Portrait"},
-                          {label: "Crop size",   value: `${crop.width} × ${crop.height} px`},
-                          {label: "Offset",      value: `${crop.left}, ${crop.top}`},
+                          {label: "Orientation", value: applied.crop.isRotated ? "Landscape" : "Portrait"},
+                          {label: "Crop size",   value: `${applied.crop.width} × ${applied.crop.height} px`},
+                          {label: "Offset",      value: `${applied.crop.left}, ${applied.crop.top}`},
                           {label: "Source size", value: naturalSize ? `${naturalSize.w} × ${naturalSize.h} px` : "—"},
                         ]} />
                       </div>
@@ -201,8 +232,12 @@ export function App() {
 
                     {error && <div style={errorBoxStyle}>{error}</div>}
 
-                    <button type="submit" disabled={generating || !name.trim() || tooSmall}
-                      className="btn-primary" style={primaryBtnStyle}>
+                    <button
+                      type="submit"
+                      disabled={generating || !name.trim() || !applied || !!dimensionError}
+                      className="btn-primary"
+                      style={primaryBtnStyle}
+                    >
                       {generating ? "Generating…" : "Generate Image Target"}
                     </button>
                   </form>
@@ -232,7 +267,6 @@ export function App() {
               </button>
             </div>
 
-            {/* All details */}
             <div style={{maxWidth: 520, marginBottom: 10}}>
               <button type="button" onClick={() => setShowDetails(v => !v)} style={toggleBtnStyle}>
                 <ChevronToggle open={showDetails} /> All details
@@ -255,14 +289,12 @@ export function App() {
               )}
             </div>
 
-            {/* Image target drop-down */}
             <div style={{maxWidth: 520, marginBottom: 32}}>
               <button type="button" onClick={() => setShowTarget(v => !v)} style={toggleBtnStyle}>
                 <ChevronToggle open={showTarget} /> Image target
               </button>
               {showTarget && (
                 <div style={{...infoCardStyle, marginTop: 10}}>
-                  {/* Image grid */}
                   <div style={{padding: "12px 16px", borderBottom: `1px solid ${c.border}`}}>
                     <div style={{display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 8}}>
                       {(["raw","original","cropped","luminance"] as const).map(key => (
@@ -276,13 +308,11 @@ export function App() {
                       ))}
                     </div>
                   </div>
-                  {/* Property rows */}
                   <InfoRows rows={flattenDescriptor(result.descriptor)} />
                 </div>
               )}
             </div>
 
-            {/* Thumbnail */}
             <div style={{maxWidth: 520}}>
               <p style={sectionLabelStyle}>Thumbnail (350 px)</p>
               <img src={result.urls.thumbnail} alt="thumbnail"
@@ -291,6 +321,21 @@ export function App() {
           </>
         )}
       </div>
+
+      {/* ── Cropper modal ── */}
+      {cropperOpen && imgUrl && naturalSize && (
+        <CropperModal
+          imgUrl={imgUrl}
+          naturalSize={naturalSize}
+          initialIsRotated={applied ? applied.crop.isRotated : defaultFeasibleRotation(naturalSize.w, naturalSize.h)}
+          initialVisualRect={applied?.visualRect ?? null}
+          onApply={(r) => { setApplied(r); setCropperOpen(false); }}
+          onCancel={() => {
+            setCropperOpen(false);
+            if (!applied) { setFile(null); setImgUrl(""); setNaturalSize(null); setPhase("upload"); }
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -384,6 +429,15 @@ function UploadIcon() {
   );
 }
 
+function CropIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{marginRight: 5, flexShrink: 0}}>
+      <path d="M6 2v14a2 2 0 0 0 2 2h14" />
+      <path d="M18 22V8a2 2 0 0 0-2-2H2" />
+    </svg>
+  );
+}
+
 // ── Styles ────────────────────────────────────────────────────────────────────
 
 const pageTitleStyle: CSSProperties = {
@@ -448,6 +502,20 @@ const backBtnStyle: CSSProperties = {
   display: "inline-flex", alignItems: "center",
   background: "none", border: "none",
   color: c.accent, fontSize: 14, fontWeight: 500, cursor: "pointer", padding: 0,
+};
+
+const adjustCropBtnStyle: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  background: c.accentLight,
+  color: c.accent,
+  border: "none",
+  borderRadius: 8,
+  padding: "6px 14px",
+  fontSize: 12,
+  fontWeight: 600,
+  cursor: "pointer",
+  fontFamily: "inherit",
 };
 
 const errorBoxStyle: CSSProperties = {

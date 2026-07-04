@@ -75,6 +75,32 @@ button, input, select, textarea { font-family: inherit; }
 .btn-secondary { transition: background 0.14s ease; }
 .btn-secondary:hover { background: var(--fill) !important; }
 
+.its-zoom-slider {
+  flex: 1;
+  width: 100%;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.its-zoom-slider:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.its-crop-rotate-btn {
+  transition: background 0.14s ease, transform 0.14s ease;
+}
+.its-crop-rotate-btn:hover:not(:disabled) {
+  background: rgba(40, 40, 46, 0.8) !important;
+}
+.its-crop-rotate-btn:active:not(:disabled) {
+  transform: scale(0.94);
+}
+.its-crop-rotate-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
 .its-input {
   width: 100%;
   padding: 10px 12px;
