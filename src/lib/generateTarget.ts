@@ -145,24 +145,33 @@ export async function generateTarget(
   return {name, descriptor, blobs, urls};
 }
 
-export async function downloadZip(result: GeneratedTarget): Promise<void> {
+async function buildZip(result: GeneratedTarget): Promise<Blob> {
   const {default: JSZip} = await import("jszip");
   const zip = new JSZip();
   const ext = "jpg";
   const n   = result.name;
-
   zip.file(`${n}_raw.${ext}`,       result.blobs.raw);
   zip.file(`${n}_original.${ext}`,  result.blobs.original);
   zip.file(`${n}_cropped.${ext}`,   result.blobs.cropped);
   zip.file(`${n}_thumbnail.${ext}`, result.blobs.thumbnail);
   zip.file(`${n}_luminance.${ext}`, result.blobs.luminance);
   zip.file("descriptor.json",       JSON.stringify(result.descriptor, null, 2));
+  return zip.generateAsync({type: "blob"});
+}
 
-  const blob = await zip.generateAsync({type: "blob"});
-  const url  = URL.createObjectURL(blob);
-  const a    = document.createElement("a");
+export function triggerZipDownload(zipBlob: Blob, name: string): void {
+  const url = URL.createObjectURL(zipBlob);
+  const a   = document.createElement("a");
   a.href     = url;
-  a.download = `${n}-image-target.zip`;
+  a.download = `${name}-image-target.zip`;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+export async function downloadZip(result: GeneratedTarget): Promise<void> {
+  triggerZipDownload(await buildZip(result), result.name);
+}
+
+export async function generateZipBlob(result: GeneratedTarget): Promise<Blob> {
+  return buildZip(result);
 }

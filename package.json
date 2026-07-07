@@ -10,12 +10,15 @@
   },
   "dependencies": {
     "jszip": "^3.10.1",
+    "peerjs": "^1.5.5",
+    "qrcode": "^1.5.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-easy-crop": "^6.1.0",
     "three": "^0.185.1"
   },
   "devDependencies": {
+    "@types/qrcode": "^1.5.6",
     "@types/react": "^18.3.1",
     "@types/react-dom": "^18.3.0",
     "@types/three": "^0.185.0",

@@ -2,10 +2,9 @@ import {useEffect, useRef, useState, type CSSProperties} from "react";
 import * as THREE from "three";
 import type {GeneratedTarget} from "../lib/generateTarget";
 
-// XR8's Threejs pipeline module reads THREE off window; it's built for script-tag usage, not ESM imports.
 (window as unknown as {THREE: typeof THREE}).THREE = THREE;
 
-// XR8.run() can only fire once per page load. This flag prevents double-init.
+// XR8.run() can only fire once per page load.
 let xr8Started = false;
 
 function loadScript(src: string, attrs?: Record<string, string>): Promise<void> {
@@ -30,20 +29,12 @@ type ImageDetail = {
 
 export {xr8Started};
 
-export function ARTestOverlay({
-  result,
-  visible,
-  onClose,
-}: {
-  result: GeneratedTarget;
-  visible: boolean;
-  onClose: () => void;
-}) {
-  const canvasRef  = useRef<HTMLCanvasElement>(null);
+export function ARTestOverlay({result, onClose, visible}: {result: GeneratedTarget; onClose: () => void; visible: boolean}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const [detected, setDetected] = useState(false);
   const [xrError, setXrError]   = useState<string | null>(null);
 
-  // Lock scroll + pinch-zoom whenever the overlay is on screen
+  // Lock viewport while AR is visible; restore when hidden
   useEffect(() => {
     if (!visible) return;
     const meta = document.querySelector<HTMLMetaElement>('meta[name="viewport"]');
@@ -57,7 +48,6 @@ export function ARTestOverlay({
     };
   }, [visible]);
 
-  // Load CDN scripts once on mount (same order as portal admin TestTarget)
   useEffect(() => {
     if ((window as any).XR8) return;
     loadScript("https://cdn.jsdelivr.net/npm/@8thwall/xrextras@1/dist/xrextras.js")
@@ -66,13 +56,11 @@ export function ARTestOverlay({
       .catch(() => setXrError("Failed to load AR engine. Check your connection."));
   }, []);
 
-  // Start XR8 pipeline — fires once per page load (xr8Started guard)
   useEffect(() => {
     if (!canvasRef.current || xr8Started) return;
     xr8Started = true;
 
     const canvas = canvasRef.current;
-    // Patch imagePath to the luminance blob URL so XR8 can load the image
     const descriptor: Record<string, unknown> = {...result.descriptor, imagePath: result.urls.luminance};
 
     const init = () => {
@@ -90,8 +78,8 @@ export function ARTestOverlay({
         mesh.visible = true;
       };
 
-      const XR8 = (window as any).XR8;
-      const XRExtras = (window as any).XRExtras;
+      const XR8        = (window as any).XR8;
+      const XRExtras   = (window as any).XRExtras;
       const LandingPage = (window as any).LandingPage;
 
       XR8.addCameraPipelineModules([
@@ -104,48 +92,25 @@ export function ARTestOverlay({
         XRExtras.RuntimeError.pipelineModule(),
         {
           name: "its-test-target",
-
           onStart: ({canvas: c}: {canvas: HTMLCanvasElement}) => {
             const {scene, camera} = XR8.Threejs.xrScene();
             scene.add(new THREE.AmbientLight(0xffffff, 1));
-
             const props = descriptor.properties as {width: number; height: number};
             const ar = props.width / props.height;
             mesh = new THREE.Mesh(
               new THREE.PlaneGeometry(ar, 1),
-              new THREE.MeshBasicMaterial({
-                color: 0x30d158,
-                transparent: true,
-                opacity: 0.35,
-                side: THREE.DoubleSide,
-                depthWrite: false,
-              }),
+              new THREE.MeshBasicMaterial({color: 0x30d158, transparent: true, opacity: 0.35, side: THREE.DoubleSide, depthWrite: false}),
             );
             mesh.visible = false;
             scene.add(mesh);
-
             XR8.XrController.configure({imageTargetData: [descriptor]});
-            XR8.XrController.updateCameraProjectionMatrix({
-              origin: camera.position,
-              facing: camera.quaternion,
-            });
-
+            XR8.XrController.updateCameraProjectionMatrix({origin: camera.position, facing: camera.quaternion});
             c.addEventListener("touchmove", (e: TouchEvent) => e.preventDefault());
           },
-
           listeners: [
-            {
-              event: "reality.imagefound",
-              process: ({detail}: {detail: ImageDetail}) => { placeMesh(detail); setDetected(true); },
-            },
-            {
-              event: "reality.imageupdated",
-              process: ({detail}: {detail: ImageDetail}) => { placeMesh(detail); },
-            },
-            {
-              event: "reality.imagelost",
-              process: () => { if (mesh) mesh.visible = false; setDetected(false); },
-            },
+            {event: "reality.imagefound",  process: ({detail}: {detail: ImageDetail}) => { placeMesh(detail); setDetected(true); }},
+            {event: "reality.imageupdated", process: ({detail}: {detail: ImageDetail}) => { placeMesh(detail); }},
+            {event: "reality.imagelost",   process: () => { if (mesh) mesh.visible = false; setDetected(false); }},
           ],
         },
       ]);
@@ -153,81 +118,48 @@ export function ARTestOverlay({
       XR8.run({canvas});
     };
 
-    (window as any).XR8 ? init() : window.addEventListener("xrloaded", init);
+    if ((window as any).XR8) { init(); } else { window.addEventListener("xrloaded", init); }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Canvas stays in the DOM at all times so XR8 never loses its rendering target.
-  // When not visible, z-index: -1 places it behind all in-flow app content.
+  // Canvas is the base — always in the DOM once mounted, always position:fixed at z:0.
+  // The app UI sits on top of it with a solid background. Showing/hiding AR means
+  // showing/hiding the app UI, not the canvas. The HUD is only rendered when visible.
   return (
     <>
-      <canvas
-        ref={canvasRef}
-        style={{
-          position: "fixed",
-          top: 0, left: 0, bottom: 0, right: 0,
-          width: "100%",
-          height: "100%",
-          display: "block",
-          zIndex: visible ? 999 : -1,
-        }}
-      />
-
+      <canvas ref={canvasRef}
+        style={{position: "fixed", inset: 0, width: "100%", height: "100%", display: "block", zIndex: 0}} />
       {visible && (
-        <div style={{position: "fixed", inset: 0, zIndex: 1000, pointerEvents: "none"}}>
-          {/* Status chip (top left) */}
+        <div style={{position: "fixed", inset: 0, zIndex: 1, pointerEvents: "none"}}>
           <div style={{position: "absolute", top: 16, left: 16}}>
             {xrError ? (
-              <div style={{...chip, background: errorBg, border: `1px solid ${errorBorder}`, color: errorText}}>
-                {xrError}
-              </div>
+              <div style={{...chip, background: errorBg, border: `1px solid ${errorBorder}`, color: errorText}}>{xrError}</div>
             ) : detected ? (
-              <div style={{...chip, background: successBg, border: `1px solid ${successBorder}`, color: successText}}>
-                ✓ Target detected
-              </div>
+              <div style={{...chip, background: successBg, border: `1px solid ${successBorder}`, color: successText}}>✓ Target detected</div>
             ) : (
               <div style={chip}>Scanning for "{result.name}"</div>
             )}
           </div>
-
-          {/* Close button (top right) */}
-          <button onClick={onClose} style={{...chip, ...closeBtnStyle}}>
-            ✕ Close
-          </button>
+          <button onClick={onClose} style={{...chip, ...closeBtnStyle}}>✕ Close</button>
         </div>
       )}
     </>
   );
 }
 
-// Always-dark colours — camera context, independent of app theme
-const successBg     = "rgba(48, 209, 88, 0.18)";
-const successBorder = "#30D158";
-const successText   = "#30D158";
-const errorBg       = "rgba(255, 69, 58, 0.18)";
-const errorBorder   = "#FF453A";
-const errorText     = "#FF453A";
+const successBg = "rgba(48, 209, 88, 0.18)"; const successBorder = "#30D158"; const successText = "#30D158";
+const errorBg   = "rgba(255, 69, 58, 0.18)";  const errorBorder   = "#FF453A"; const errorText   = "#FF453A";
 
 const chip: CSSProperties = {
   background: "rgba(28, 28, 30, 0.72)",
-  backdropFilter: "saturate(180%) blur(20px)",
-  WebkitBackdropFilter: "saturate(180%) blur(20px)",
-  border: "1px solid rgba(84, 84, 88, 0.45)",
-  borderRadius: 12,
-  padding: "10px 16px",
-  color: "#ffffff",
-  fontSize: 13,
-  fontWeight: 500,
-  boxShadow: "0 2px 8px rgba(0,0,0,0.5)",
-  pointerEvents: "auto",
+  backdropFilter: "saturate(180%) blur(20px)", WebkitBackdropFilter: "saturate(180%) blur(20px)",
+  border: "1px solid rgba(84, 84, 88, 0.45)", borderRadius: 12,
+  padding: "10px 16px", color: "#ffffff", fontSize: 13, fontWeight: 500,
+  boxShadow: "0 2px 8px rgba(0,0,0,0.5)", pointerEvents: "auto",
 };
 
 const closeBtnStyle: CSSProperties = {
-  position: "absolute",
-  top: 16,
-  right: 16,
-  cursor: "pointer",
-  fontFamily: "inherit",
-  background: "rgba(28, 28, 30, 0.72)",
-  border: "1px solid rgba(84, 84, 88, 0.45)",
+  position: "absolute", top: 16, right: 16,
+  cursor: "pointer", fontFamily: "inherit",
+  background: "rgba(28, 28, 30, 0.72)", border: "1px solid rgba(84, 84, 88, 0.45)",
 };

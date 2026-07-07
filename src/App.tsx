@@ -1,9 +1,17 @@
-import {useEffect, useRef, useState, type CSSProperties, type FormEvent} from "react";
+import {useRef, useState, useEffect, type CSSProperties, type FormEvent} from "react";
 import {c} from "./theme";
 import {defaultFeasibleRotation, orientationFeasible} from "./lib/imageCrop";
 import {generateTarget, downloadZip, type GeneratedTarget} from "./lib/generateTarget";
 import {CropperModal, type CropperResult} from "./components/CropperModal";
+import {ARTestPage} from "./components/ARTestPage";
 import {ARTestOverlay, xr8Started} from "./components/ARTestOverlay";
+import {QRSharePanel} from "./components/QRSharePanel";
+
+export function AppRoot() {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("mode") === "ar") return <ARTestPage />;
+  return <App />;
+}
 
 type Phase = "upload" | "configure" | "results";
 
@@ -21,8 +29,11 @@ export function App() {
   const [draggingOver, setDraggingOver] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
   const [showTarget, setShowTarget]   = useState(false);
-  const [arActivated, setArActivated] = useState(false);
-  const [showAR, setShowAR]           = useState(false);
+  const [showAFrame, setShowAFrame]   = useState(false);
+  const [showThreeJS, setShowThreeJS] = useState(false);
+  const [showAR, setShowAR]             = useState(false);
+  const [arMounted, setArMounted]       = useState(false);
+  const [qrPanelOpen, setQrPanelOpen]   = useState(false);
   const fileInputRef                  = useRef<HTMLInputElement>(null);
 
   const dimensionError = naturalSize &&
@@ -82,21 +93,26 @@ export function App() {
   }
 
   function handleTestInAR() {
-    if (xr8Started) {
-      // XR8 can only initialize once per page load; reload to test a different target
-      window.location.reload();
-      return;
-    }
-    setArActivated(true);
+    if (!result) return;
+    const firstOpen = !arMounted;
+    setArMounted(true);
     setShowAR(true);
+    if (!firstOpen) {
+      const xr8 = (window as any).XR8;
+      if (xr8) try { xr8.resume(); } catch {}
+    }
+  }
+
+  function handleCloseAR() {
+    const xr8 = (window as any).XR8;
+    if (xr8) try { xr8.pause(); } catch {}
+    document.body.style.overflow = "";
+    document.documentElement.style.overflow = "";
+    setShowAR(false);
   }
 
   function handleStartOver() {
-    if (arActivated) {
-      // XR8 is running and can't be stopped; page reload resets all state cleanly
-      window.location.reload();
-      return;
-    }
+    if (xr8Started) { window.location.reload(); return; }
     setFile(null);
     setImgUrl("");
     setNaturalSize(null);
@@ -107,11 +123,17 @@ export function App() {
     setError(null);
     setShowDetails(false);
     setShowTarget(false);
+    setShowAFrame(false);
+    setShowThreeJS(false);
     setPhase("upload");
   }
 
   return (
-    <div style={{minHeight: "100vh", background: c.bg}}>
+    <>
+    {arMounted && result && (
+      <ARTestOverlay result={result} visible={showAR} onClose={handleCloseAR} />
+    )}
+    <div style={{minHeight: "100vh", background: c.bg, position: "relative", zIndex: 1, display: showAR ? "none" : "block"}}>
 
       {/* ── Header ── */}
       <header style={{
@@ -128,8 +150,9 @@ export function App() {
             <span style={{marginLeft: 10, fontSize: 12, color: c.textMuted}}>8th Wall · client-side pipeline</span>
           </div>
           {phase !== "upload" && (
-            <button onClick={handleStartOver} className="btn-secondary" style={ghostBtnStyle}>
-              Start over
+            <button onClick={handleStartOver} className="btn-secondary" title="Start over"
+              style={{...ghostBtnStyle, padding: "7px 10px", display: "flex", alignItems: "center", justifyContent: "center"}}>
+              <RestartIcon />
             </button>
           )}
         </div>
@@ -140,8 +163,13 @@ export function App() {
         {/* ── Upload ── */}
         {phase === "upload" && (
           <>
-            <h1 style={pageTitleStyle}>Generate Image Target</h1>
-            <p style={pageDescStyle}>Upload a photo to crop, orient, and export an 8th Wall-compatible image target package.</p>
+            <h1 style={pageTitleStyle}>Image Target Studio</h1>
+            <p style={{...pageDescStyle, marginBottom: 6}}>
+              Generate 8th Wall-compatible image targets — cropped, oriented, and packaged in seconds.
+            </p>
+            <p style={{margin: "0 0 28px", fontSize: 13, color: c.textMuted}}>
+              Everything runs in your browser. No account, no server, no upload.
+            </p>
             <input ref={fileInputRef} type="file" accept="image/*" style={{display: "none"}}
               onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f); }} />
             <div
@@ -157,6 +185,22 @@ export function App() {
                 Drop an image here, or click to choose
               </p>
               <p style={{margin: 0, fontSize: 13, color: c.textMuted}}>PNG, JPEG, or WebP · minimum 480 × 640 px</p>
+            </div>
+
+            <div style={{maxWidth: 520, marginTop: 20, paddingTop: 20, borderTop: `1px solid ${c.border}`, display: "flex", flexWrap: "wrap", gap: "14px 0"}}>
+              {([
+                {icon: <ShieldIcon />,  label: "Private by design",     sub: "Your images never leave your device"},
+                {icon: <CpuIcon />,     label: "100% client-side",      sub: "No server, no account, no upload required"},
+                {icon: <P2PLinkIcon />, label: "Secure mobile preview", sub: "Device-to-device via WebRTC — no relay"},
+              ] as const).map(({icon, label, sub}) => (
+                <div key={label} style={{flex: "1 1 160px", display: "flex", alignItems: "flex-start", gap: 10, paddingRight: 12}}>
+                  <div style={{color: c.textSec, flexShrink: 0, marginTop: 1}}>{icon}</div>
+                  <div>
+                    <p style={{margin: 0, fontSize: 12, fontWeight: 600, color: c.textSec, lineHeight: 1.3}}>{label}</p>
+                    <p style={{margin: "3px 0 0", fontSize: 11, color: c.textMuted, lineHeight: 1.45}}>{sub}</p>
+                  </div>
+                </div>
+              ))}
             </div>
           </>
         )}
@@ -273,6 +317,8 @@ export function App() {
                 <ChevronLeftIcon /> Back
               </button>
             </div>
+            <img src={result.urls.thumbnail} alt="thumbnail"
+              style={{maxWidth: 240, borderRadius: 10, display: "block", border: `1px solid ${c.border}`, marginBottom: 20}} />
             <h1 style={pageTitleStyle}>{result.name}</h1>
             <p style={pageDescStyle}>Generated successfully. Download the zip to use with 8th Wall.</p>
 
@@ -283,10 +329,45 @@ export function App() {
               <button onClick={handleTestInAR} className="btn-secondary" style={arBtnStyle}>
                 <ARIcon /> Test in AR
               </button>
+              <button onClick={() => setQrPanelOpen(true)} className="btn-secondary" style={arBtnStyle}>
+                <QRIcon /> Test on Mobile
+              </button>
               <button onClick={handleStartOver} className="btn-secondary" style={ghostBtnStyle}>
                 New target
               </button>
             </div>
+
+            {/* ── Code snippets ── */}
+            {(() => {
+              const p = result.descriptor.properties as {width: number; height: number};
+              const ar = p.width / p.height;
+              return (
+                <>
+                  <div style={{maxWidth: 520, marginBottom: 10}}>
+                    <button type="button" onClick={() => setShowAFrame(v => !v)} style={toggleBtnStyle}>
+                      <ChevronToggle open={showAFrame} /> A-Frame snippet
+                    </button>
+                    {showAFrame && (
+                      <div style={{marginTop: 10}}>
+                        <CodeBlock label="index.html" code={aframeHtml(result.name)} />
+                        <CodeBlock label="app.js" code={aframeJs(result.name)} />
+                      </div>
+                    )}
+                  </div>
+
+                  <div style={{maxWidth: 520, marginBottom: 10}}>
+                    <button type="button" onClick={() => setShowThreeJS(v => !v)} style={toggleBtnStyle}>
+                      <ChevronToggle open={showThreeJS} /> Three.js snippet
+                    </button>
+                    {showThreeJS && (
+                      <div style={{marginTop: 10}}>
+                        <CodeBlock label="app.js" code={threejsJs(result.name, ar)} />
+                      </div>
+                    )}
+                  </div>
+                </>
+              );
+            })()}
 
             <div style={{maxWidth: 520, marginBottom: 10}}>
               <button type="button" onClick={() => setShowDetails(v => !v)} style={toggleBtnStyle}>
@@ -314,42 +395,43 @@ export function App() {
               <button type="button" onClick={() => setShowTarget(v => !v)} style={toggleBtnStyle}>
                 <ChevronToggle open={showTarget} /> Image target
               </button>
-              {showTarget && (
-                <div style={{...infoCardStyle, marginTop: 10}}>
-                  <div style={{padding: "12px 16px", borderBottom: `1px solid ${c.border}`}}>
-                    <div style={{display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 8}}>
-                      {(["raw","original","cropped","luminance"] as const).map(key => (
-                        <div key={key}>
-                          <img src={result.urls[key]} alt={key} style={{
-                            width: "100%", borderRadius: 6, display: "block",
-                            border: `1px solid ${c.border}`,
-                          }} />
-                          <p style={{margin: "4px 0 0", fontSize: 10, color: c.textMuted, textAlign: "center", textTransform: "capitalize"}}>{key}</p>
-                        </div>
-                      ))}
+              {showTarget && (() => {
+                const p = result.descriptor.properties as {width: number; height: number; originalWidth: number; originalHeight: number; isRotated: boolean};
+                const specs: Record<string, string> = {
+                  raw:       `${p.originalWidth} × ${p.originalHeight} px`,
+                  original:  p.isRotated ? `${p.originalHeight} × ${p.originalWidth} px` : `${p.originalWidth} × ${p.originalHeight} px`,
+                  cropped:   `${p.width} × ${p.height} px`,
+                  luminance: `${Math.round(640 * p.width / p.height)} × 640 px · grayscale`,
+                  thumbnail: `${Math.round(350 * p.width / p.height)} × 350 px`,
+                };
+                return (
+                  <div style={{...infoCardStyle, marginTop: 10}}>
+                    <div style={{padding: "12px 16px", borderBottom: `1px solid ${c.border}`}}>
+                      <div style={{display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 8}}>
+                        {(["raw","original","cropped","luminance","thumbnail"] as const).map(key => (
+                          <div key={key}>
+                            <img src={result.urls[key]} alt={key} style={{
+                              width: "100%", borderRadius: 6, display: "block",
+                              border: `1px solid ${c.border}`,
+                            }} />
+                            <p style={{margin: "4px 0 1px", fontSize: 10, color: c.textMuted, textAlign: "center", textTransform: "capitalize"}}>{key}</p>
+                            <p style={{margin: 0, fontSize: 10, color: c.textMuted, textAlign: "center", opacity: 0.7}}>{specs[key]}</p>
+                          </div>
+                        ))}
+                      </div>
                     </div>
+                    <InfoRows rows={flattenDescriptor(result.descriptor)} />
                   </div>
-                  <InfoRows rows={flattenDescriptor(result.descriptor)} />
-                </div>
-              )}
-            </div>
-
-            <div style={{maxWidth: 520}}>
-              <p style={sectionLabelStyle}>Thumbnail (350 px)</p>
-              <img src={result.urls.thumbnail} alt="thumbnail"
-                style={{maxWidth: 240, borderRadius: 10, display: "block", border: `1px solid ${c.border}`}} />
+                );
+              })()}
             </div>
           </>
         )}
       </div>
 
-      {/* ── AR test overlay ── */}
-      {arActivated && result && (
-        <ARTestOverlay
-          result={result}
-          visible={showAR}
-          onClose={() => setShowAR(false)}
-        />
+      {/* ── QR share panel ── */}
+      {qrPanelOpen && result && (
+        <QRSharePanel result={result} onClose={() => setQrPanelOpen(false)} />
       )}
 
       {/* ── Cropper modal ── */}
@@ -367,6 +449,7 @@ export function App() {
         />
       )}
     </div>
+    </>
   );
 }
 
@@ -468,12 +551,68 @@ function CropIcon() {
   );
 }
 
+function QRIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{marginRight: 6, flexShrink: 0}}>
+      <rect x="3" y="3" width="7" height="7" rx="1" />
+      <rect x="14" y="3" width="7" height="7" rx="1" />
+      <rect x="3" y="14" width="7" height="7" rx="1" />
+      <rect x="14" y="14" width="3" height="3" />
+      <line x1="21" y1="14" x2="21" y2="14" />
+      <line x1="17" y1="18" x2="21" y2="18" />
+      <line x1="21" y1="18" x2="21" y2="21" />
+    </svg>
+  );
+}
+
 function ARIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{marginRight: 6, flexShrink: 0}}>
       <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
       <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
       <line x1="12" y1="22.08" x2="12" y2="12" />
+    </svg>
+  );
+}
+
+function RestartIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+      <path d="M3 3v5h5" />
+    </svg>
+  );
+}
+
+function ShieldIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+    </svg>
+  );
+}
+
+function CpuIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="9" y="9" width="6" height="6" rx="1" />
+      <rect x="2" y="2" width="20" height="20" rx="3" />
+      <line x1="9" y1="2" x2="9" y2="5" /><line x1="15" y1="2" x2="15" y2="5" />
+      <line x1="9" y1="19" x2="9" y2="22" /><line x1="15" y1="19" x2="15" y2="22" />
+      <line x1="2" y1="9" x2="5" y2="9" /><line x1="2" y1="15" x2="5" y2="15" />
+      <line x1="19" y1="9" x2="22" y2="9" /><line x1="19" y1="15" x2="22" y2="15" />
+    </svg>
+  );
+}
+
+function P2PLinkIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="6" cy="6" r="3" />
+      <circle cx="18" cy="18" r="3" />
+      <path d="M9 6h3a3 3 0 0 1 3 3v6" />
+      <polyline points="15 21 18 21 21 18" />
+      <polyline points="9 3 6 3 3 6" />
     </svg>
   );
 }
@@ -586,3 +725,130 @@ const toggleBtnStyle: CSSProperties = {
   background: "none", border: "none", padding: 0,
   fontSize: 13, fontWeight: 500, color: c.textMuted, cursor: "pointer",
 };
+
+const copyBtnStyle: CSSProperties = {
+  background: "none", border: "none",
+  fontSize: 11, fontWeight: 600,
+  color: "#8e8e93", cursor: "pointer",
+  padding: "2px 6px", borderRadius: 4,
+  fontFamily: "inherit",
+};
+
+// ── Code snippet sub-component ────────────────────────────────────────────────
+
+function CodeBlock({code, label}: {code: string; label: string}) {
+  const [copied, setCopied] = useState(false);
+  function copy() {
+    navigator.clipboard?.writeText(code).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    }).catch(() => {});
+  }
+  return (
+    <div style={{borderRadius: 10, overflow: "hidden", border: "1px solid #3a3a3c", marginBottom: 8}}>
+      <div style={{display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 12px", background: "#2c2c2e", borderBottom: "1px solid #3a3a3c"}}>
+        <span style={{fontSize: 11, fontWeight: 600, color: "#8e8e93", fontFamily: "ui-monospace, 'SF Mono', Menlo, monospace"}}>{label}</span>
+        <button onClick={copy} style={{...copyBtnStyle, color: copied ? "#30d158" : "#8e8e93"}}>
+          {copied ? "Copied!" : "Copy"}
+        </button>
+      </div>
+      <pre style={{margin: 0, padding: "12px 14px", overflowX: "auto", fontSize: 12, lineHeight: 1.65, color: "#e5e5ea", background: "#1c1c1e", fontFamily: "ui-monospace, 'SF Mono', Menlo, monospace"}}>
+        <code>{code}</code>
+      </pre>
+    </div>
+  );
+}
+
+// ── Snippet generators ────────────────────────────────────────────────────────
+
+function aframeHtml(name: string): string {
+  return `<a-scene
+  xrweb="disableWorldTracking: true"
+  xrextras-loading
+  xrextras-runtime-error>
+
+  <xrextras-named-image-target name="${name}">
+    <!-- AR content anchored to the detected image -->
+    <a-plane color="#30d158" opacity="0.35" width="1" height="1"></a-plane>
+  </xrextras-named-image-target>
+
+</a-scene>`;
+}
+
+function aframeJs(name: string): string {
+  return `import descriptor from './assets/${name}_descriptor.json'
+
+XR8.addCameraPipelineModules([
+  XR8.XrController.pipelineModule(),
+  XRExtras.Loading.pipelineModule(),
+  XRExtras.RuntimeError.pipelineModule(),
+  {
+    name: 'configure-target',
+    onAttach: () => XR8.XrController.configure({
+      imageTargetData: [{ ...descriptor, imagePath: './assets/${name}_luminance.jpg' }],
+    }),
+  },
+])
+
+window.addEventListener('xrloaded', () =>
+  XR8.run({ canvas: document.getElementById('camerafeed') }),
+)`;
+}
+
+function threejsJs(name: string, ar: number): string {
+  return `import * as THREE from 'three'
+import descriptor from './assets/${name}_descriptor.json'
+
+window.THREE = THREE
+
+const targetModule = () => {
+  let mesh = null
+  return {
+    name: '${name}',
+    onStart: () => {
+      const { scene, camera } = XR8.Threejs.xrScene()
+      mesh = new THREE.Mesh(
+        new THREE.PlaneGeometry(${ar.toFixed(3)}, 1),
+        new THREE.MeshBasicMaterial({ color: 0x30d158, opacity: 0.35, transparent: true }),
+      )
+      mesh.visible = false
+      scene.add(mesh)
+      XR8.XrController.configure({
+        imageTargetData: [{ ...descriptor, imagePath: './assets/${name}_luminance.jpg' }],
+      })
+      XR8.XrController.updateCameraProjectionMatrix({
+        origin: camera.position,
+        facing: camera.quaternion,
+      })
+    },
+    listeners: [
+      { event: 'reality.imagefound',  process: ({ detail }) => {
+        mesh.position.copy(detail.position)
+        mesh.quaternion.copy(detail.rotation)
+        mesh.scale.setScalar(detail.scale)
+        mesh.visible = true
+      }},
+      { event: 'reality.imageupdated', process: ({ detail }) => {
+        mesh.position.copy(detail.position)
+        mesh.quaternion.copy(detail.rotation)
+        mesh.scale.setScalar(detail.scale)
+      }},
+      { event: 'reality.imagelost', process: () => { mesh.visible = false } },
+    ],
+  }
+}
+
+XR8.addCameraPipelineModules([
+  XR8.GlTextureRenderer.pipelineModule(),
+  XR8.Threejs.pipelineModule(),
+  XR8.XrController.pipelineModule(),
+  XRExtras.FullWindowCanvas.pipelineModule(),
+  XRExtras.Loading.pipelineModule(),
+  XRExtras.RuntimeError.pipelineModule(),
+  targetModule(),
+])
+
+window.addEventListener('xrloaded', () =>
+  XR8.run({ canvas: document.getElementById('camerafeed') }),
+)`;
+}
