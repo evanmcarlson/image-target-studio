@@ -3,6 +3,7 @@ import {c} from "./theme";
 import {defaultFeasibleRotation, orientationFeasible} from "./lib/imageCrop";
 import {generateTarget, downloadZip, type GeneratedTarget} from "./lib/generateTarget";
 import {CropperModal, type CropperResult} from "./components/CropperModal";
+import {ARTestOverlay, xr8Started} from "./components/ARTestOverlay";
 
 type Phase = "upload" | "configure" | "results";
 
@@ -20,6 +21,8 @@ export function App() {
   const [draggingOver, setDraggingOver] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
   const [showTarget, setShowTarget]   = useState(false);
+  const [arActivated, setArActivated] = useState(false);
+  const [showAR, setShowAR]           = useState(false);
   const fileInputRef                  = useRef<HTMLInputElement>(null);
 
   const dimensionError = naturalSize &&
@@ -78,7 +81,22 @@ export function App() {
     }
   }
 
+  function handleTestInAR() {
+    if (xr8Started) {
+      // XR8 can only initialize once per page load; reload to test a different target
+      window.location.reload();
+      return;
+    }
+    setArActivated(true);
+    setShowAR(true);
+  }
+
   function handleStartOver() {
+    if (arActivated) {
+      // XR8 is running and can't be stopped; page reload resets all state cleanly
+      window.location.reload();
+      return;
+    }
     setFile(null);
     setImgUrl("");
     setNaturalSize(null);
@@ -258,9 +276,12 @@ export function App() {
             <h1 style={pageTitleStyle}>{result.name}</h1>
             <p style={pageDescStyle}>Generated successfully. Download the zip to use with 8th Wall.</p>
 
-            <div style={{display: "flex", gap: 10, marginBottom: 28}}>
+            <div style={{display: "flex", gap: 10, marginBottom: 28, flexWrap: "wrap"}}>
               <button onClick={() => downloadZip(result)} className="btn-primary" style={primaryBtnStyle}>
                 Download .zip
+              </button>
+              <button onClick={handleTestInAR} className="btn-secondary" style={arBtnStyle}>
+                <ARIcon /> Test in AR
               </button>
               <button onClick={handleStartOver} className="btn-secondary" style={ghostBtnStyle}>
                 New target
@@ -321,6 +342,15 @@ export function App() {
           </>
         )}
       </div>
+
+      {/* ── AR test overlay ── */}
+      {arActivated && result && (
+        <ARTestOverlay
+          result={result}
+          visible={showAR}
+          onClose={() => setShowAR(false)}
+        />
+      )}
 
       {/* ── Cropper modal ── */}
       {cropperOpen && imgUrl && naturalSize && (
@@ -438,6 +468,16 @@ function CropIcon() {
   );
 }
 
+function ARIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{marginRight: 6, flexShrink: 0}}>
+      <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
+      <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
+      <line x1="12" y1="22.08" x2="12" y2="12" />
+    </svg>
+  );
+}
+
 // ── Styles ────────────────────────────────────────────────────────────────────
 
 const pageTitleStyle: CSSProperties = {
@@ -490,6 +530,19 @@ const primaryBtnStyle: CSSProperties = {
 const ghostBtnStyle: CSSProperties = {
   background: "none",
   color: c.textMuted,
+  border: `1px solid ${c.border}`,
+  borderRadius: 10,
+  padding: "9px 16px",
+  fontWeight: 500,
+  fontSize: 13,
+  cursor: "pointer",
+};
+
+const arBtnStyle: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  background: "none",
+  color: c.text,
   border: `1px solid ${c.border}`,
   borderRadius: 10,
   padding: "9px 16px",
